@@ -3,65 +3,8 @@ FastAPI Backend for RAG Research Assistant
 Provides REST API endpoints for research queries
 """
 
-import os
-import json
-import tempfile
-
-# ============================================================================
-# CRITICAL: Handle Google Credentials for Render
-# MUST be at the top before any other imports that use Vertex AI
-# ============================================================================
-
-def setup_google_credentials():
-    """Setup Google credentials from environment variable for Render deployment"""
-    
-    # Check if we're on Render (has RENDER environment variable)
-    is_render = os.getenv('RENDER', 'false').lower() == 'true'
-    
-    if is_render:
-        print("[INFO] Running on Render - Setting up credentials from env var")
-        
-        # Try to get credentials from JSON env var
-        creds_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-        
-        if creds_json:
-            try:
-                # Parse and validate JSON
-                creds = json.loads(creds_json)
-                
-                # Write to temporary file
-                temp_creds_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-                json.dump(creds, temp_creds_file)
-                temp_creds_file.close()
-                
-                # Set environment variable to point to temp file
-                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_creds_file.name
-                print(f"[OK] Google credentials loaded from env var")
-                
-            except json.JSONDecodeError as e:
-                print(f"[ERROR] Invalid GOOGLE_APPLICATION_CREDENTIALS_JSON: {e}")
-        else:
-            # Fall back to file path
-            creds_file = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'dev-google-credentials.json')
-            if os.path.exists(creds_file):
-                print(f"[OK] Using credentials file: {creds_file}")
-            else:
-                print(f"[WARN] No credentials found! Looking for: {creds_file}")
-    else:
-        print("[INFO] Running locally - using existing credentials")
-    
-    # Set project ID
-    project_id = os.getenv('GOOGLE_CLOUD_PROJECT')
-    if project_id:
-        print(f"[INFO] Using project: {project_id}")
-
-# Run credential setup BEFORE any other imports
-setup_google_credentials()
-
-# Now import the rest of your application
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -74,26 +17,6 @@ import uuid
 from pipeline import run_research_pipeline
 from advanced_system import quick_research, research_with_memory
 from agents import get_model_info
-
-# ============================================================================
-# SECURITY (Add API Key Authentication)
-# ============================================================================
-
-security = HTTPBearer()
-
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify API key for protected endpoints"""
-    api_key = credentials.credentials
-    expected_key = os.getenv('API_SECRET_KEY')
-    
-    # Skip auth in development or if no key is set
-    if not expected_key or os.getenv('ENVIRONMENT') != 'production':
-        return api_key
-    
-    if api_key != expected_key:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
-    
-    return api_key
 
 # ============================================================================
 # PYDANTIC MODELS (Request/Response Schemas)
@@ -156,22 +79,16 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Get CORS origins from environment
-cors_origins = os.getenv('CORS_ORIGINS', '*').split(',')
-if '*' in cors_origins and os.getenv('ENVIRONMENT') == 'production':
-    # Don't allow * in production - override with specific origins
-    cors_origins = ['https://your-frontend-domain.com']
-
-# Add CORS middleware
+# Add CORS middleware (for React/Frontend integration)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=["*"],  # In production, replace with your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Store for tracking requests
+# Store for tracking requests (optional)
 request_store: Dict[str, Dict] = {}
 
 # ============================================================================
@@ -192,12 +109,11 @@ async def root():
     return {
         "name": "RAG Research Assistant API",
         "version": "1.0.0",
-        "environment": os.getenv('ENVIRONMENT', 'development'),
         "endpoints": {
-            "research": "/research (POST) - Requires API Key",
-            "research_stream": "/research/stream (POST) - Requires API Key",
-            "health": "/health (GET) - Public",
-            "memory_query": "/memory/query (POST) - Requires API Key",
+            "research": "/research (POST)",
+            "research_stream": "/research/stream (POST)",
+            "health": "/health (GET)",
+            "memory_query": "/memory/query (POST)",
             "memory_stats": "/memory/stats (GET)",
             "model_info": "/model/info (GET)"
         },
@@ -206,7 +122,7 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
-    """Health check endpoint (public - no auth required)"""
+    """Health check endpoint"""
     return HealthResponse(
         status="healthy",
         version="1.0.0",
@@ -220,18 +136,14 @@ async def get_model_information():
     return {
         "model_info": get_model_info(),
         "available_endpoints": [
-            "/research (POST) - Requires API Key",
-            "/research/stream (POST) - Requires API Key",
-            "/memory/query (POST) - Requires API Key"
+            "/research (POST)",
+            "/research/stream (POST)",
+            "/memory/query (POST)"
         ]
     }
 
 @app.post("/research", response_model=ResearchResponse, tags=["Research"])
-async def research(
-    request: ResearchRequest, 
-    background_tasks: BackgroundTasks,
-    api_key: str = Depends(verify_api_key)  # Add API key auth
-):
+async def research(request: ResearchRequest, background_tasks: BackgroundTasks):
     """
     Execute research on a topic and return report
     
@@ -239,19 +151,20 @@ async def research(
     - **use_advanced**: Use advanced system (LangGraph, streaming, evaluation)
     - **use_memory**: Enable memory for follow-up questions
     - **return_feedback**: Include critic feedback in response
-    
-    Requires API Key in Authorization header: Bearer <your-api-key>
     """
     request_id = generate_request_id()
     
     try:
-        # Your existing research logic (same as before)
+        # Choose which system to use
         if request.use_advanced:
+            # Use advanced system with all features
             result = quick_research(request.topic, full_pipeline=True)
+            
             report = result.get("workflow_state", {}).get("report", "")
             sources = result.get("workflow_state", {}).get("sources", [])
             feedback = result.get("evaluation", None)
             
+            # Format feedback if available
             feedback_text = None
             if request.return_feedback and feedback:
                 feedback_text = f"""
@@ -269,8 +182,11 @@ Hallucination: {feedback.hallucination_score:.2%}
                 "has_evaluation": feedback is not None,
                 "request_id": request_id
             }
+            
         else:
+            # Use simple pipeline
             result = run_research_pipeline(request.topic)
+            
             report = result.get("report", "")
             sources = result.get("sources", [])
             feedback = result.get("feedback", "") if request.return_feedback else None
@@ -284,6 +200,7 @@ Hallucination: {feedback.hallucination_score:.2%}
                 "request_id": request_id
             }
         
+        # Store request for tracking
         request_store[request_id] = {
             "topic": request.topic,
             "timestamp": datetime.now().isoformat(),
@@ -294,8 +211,8 @@ Hallucination: {feedback.hallucination_score:.2%}
             request_id=request_id,
             topic=request.topic,
             report=report,
-            feedback=feedback_text if request.return_feedback else None,
-            sources=sources[:10],
+            feedback=feedback,
+            sources=sources[:10],  # Limit to 10 sources
             metadata=metadata,
             generated_at=datetime.now().isoformat()
         )
@@ -303,8 +220,99 @@ Hallucination: {feedback.hallucination_score:.2%}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ... rest of your endpoints (research_stream, memory_query, etc.)
-# Keep them the same but add Depends(verify_api_key) to protected ones
+@app.post("/research/stream", tags=["Research"])
+async def research_stream(request: ResearchRequest):
+    """
+    Stream research report as it's generated (Server-Sent Events)
+    
+    Returns streaming response with chunks as they're generated
+    """
+    async def generate_stream():
+        try:
+            # Send start event
+            yield f"data: {json.dumps({'type': 'start', 'topic': request.topic})}\n\n"
+            
+            # Run the pipeline (simplified for streaming)
+            # Note: Full streaming requires modification to pipeline
+            result = run_research_pipeline(request.topic)
+            
+            # Send report in chunks
+            report = result.get("report", "")
+            chunk_size = 500
+            
+            for i in range(0, len(report), chunk_size):
+                chunk = report[i:i+chunk_size]
+                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                await asyncio.sleep(0.01)  # Small delay for realism
+            
+            # Send completion event
+            yield f"data: {json.dumps({'type': 'complete', 'sources': result.get('sources', [])})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+@app.post("/memory/query", tags=["Memory"])
+async def memory_query(request: MemoryQueryRequest):
+    """
+    Query with memory enabled (for follow-up questions)
+    Requires previous research in memory
+    """
+    try:
+        result = research_with_memory(request.query)
+        
+        return {
+            "query": request.query,
+            "report": result.get("workflow_state", {}).get("report", ""),
+            "sources": result.get("workflow_state", {}).get("sources", []),
+            "memory_id": result.get("memory_id"),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/memory/stats", tags=["Memory"])
+async def get_memory_statistics():
+    """Get memory system statistics"""
+    try:
+        from memory_system import ResearchMemory
+        memory = ResearchMemory()
+        stats = memory.get_memory_stats()
+        
+        return {
+            "status": "available",
+            "statistics": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.get("/requests/{request_id}", tags=["Tracking"])
+async def get_request_status(request_id: str):
+    """Get status of a specific request"""
+    if request_id in request_store:
+        return request_store[request_id]
+    raise HTTPException(status_code=404, detail="Request not found")
+
+@app.get("/requests", tags=["Tracking"])
+async def list_requests(limit: int = 50):
+    """List recent requests"""
+    requests = list(request_store.values())[-limit:]
+    return {"total": len(request_store), "requests": requests}
 
 # ============================================================================
 # RUN SERVER (for development)
@@ -316,13 +324,14 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("🚀 STARTING RAG RESEARCH API SERVER")
     print("="*70)
-    print(f"\n📍 Environment: {os.getenv('ENVIRONMENT', 'development')}")
-    print("📍 API Documentation: http://localhost:8000/docs")
+    print("\n📍 API Documentation: http://localhost:8000/docs")
+    print("📍 ReDoc: http://localhost:8000/redoc")
     print("📍 Health Check: http://localhost:8000/health")
-    print("\n📝 Protected Endpoints (require API Key):")
-    print("   POST /research - Research a topic")
+    print("\n📝 Available Endpoints:")
+    print("   POST /research        - Research a topic")
     print("   POST /research/stream - Stream research report")
-    print("   POST /memory/query - Follow-up question with memory")
+    print("   POST /memory/query    - Follow-up question with memory")
+    print("   GET  /memory/stats    - Memory statistics")
     print("\n⏹️  Press Ctrl+C to stop server\n")
     print("="*70 + "\n")
     
@@ -330,6 +339,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=os.getenv('ENVIRONMENT') != 'production',
-        log_level=os.getenv('LOG_LEVEL', 'info')
+        reload=True,  # Auto-reload on code changes
+        log_level="info"
     )
