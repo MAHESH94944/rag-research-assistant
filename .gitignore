@@ -1,0 +1,44 @@
+# Secrets and credentials
+.env
+dev-google-credentials.json
+*.key
+*.pem
+*.p12
+
+# Generated files
+research_*.txt
+research_memory/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Vector stores
+vector_store/
+faiss_index/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test reports
+*.html
+.coverage
+.pytest_cache/

@@ -1,0 +1,6 @@
+# Existing requirements + additional for API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+sse-starlette>=1.6.0

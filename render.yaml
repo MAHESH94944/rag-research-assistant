@@ -1,0 +1,59 @@
+services:
+  - type: web
+    name: rag-research-api
+    runtime: python
+    repo: https://github.com/YOUR_USERNAME/YOUR_REPO_NAME
+    plan: free  # Change to 'starter' for paid plan ($7/month)
+    
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      pip install -r requirements_api.txt
+      pip install uvicorn
+    
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    
+    envVars:
+      # Vertex AI Configuration
+      - key: GOOGLE_CLOUD_PROJECT
+        value: devproject-471409  # Your project ID
+      
+      - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+        sync: false  # Will be set manually in Render dashboard
+      
+      - key: VERTEX_LOCATION
+        value: us-central1
+      
+      - key: VERTEX_MODEL_NAME
+        value: gemini-2.0-flash
+      
+      - key: VERTEX_TEMPERATURE
+        value: 0.5
+      
+      # Tavily API
+      - key: TAVILY_API_KEY
+        sync: false  # Set in dashboard
+      
+      # Optional: Writer Model
+      - key: WRITER_MODEL
+        value: gemini-2.0-flash
+      
+      # Search Configuration
+      - key: MAX_SEARCH_RESULTS
+        value: 10
+      
+      - key: MAX_CONTENT_LENGTH
+        value: 3000
+      
+      - key: SCRAPE_TIMEOUT
+        value: 8
+      
+      # RAG Configuration  
+      - key: CHUNK_SIZE
+        value: 1000
+      
+      - key: CHUNK_OVERLAP
+        value: 200
+      
+      - key: TOP_K
+        value: 3
